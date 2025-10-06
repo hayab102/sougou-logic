@@ -5,8 +5,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timezone
 
 # ===== 必須環境変数 =====
-SHEET_ID = os.environ["SHEET_ID"]                  # 同じシートのID
-GOOGLE_CREDENTIALS = os.environ["GOOGLE_CREDENTIALS"]
+SHEET_ID = os.environ.get("SHEET_ID_RAW",   os.environ["SHEET_ID"])                  # 同じシートのID
+GOOGLE_CREDENTIALS = os.environ.get("SHEET_ID_LOGIC", SHEET_ID_RAW)
 
 # ===== 任意（未指定なら自動検出に近い動作）=====
 DATA_SHEET_NAME = os.environ.get("DATA_SHEET_NAME", "")  # 例: DATA_prices / シート1
