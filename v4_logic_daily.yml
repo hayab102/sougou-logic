@@ -1,0 +1,37 @@
+.github/workflows/v4_logic_daily.yml
+name: V4 Logic Daily
+
+on:
+  schedule:
+    - cron: "10 0 * * *"   # JST 09:10（GitHubはUTC）
+  workflow_dispatch: {}     # 手動実行ボタンも出す
+
+permissions:
+  contents: read
+
+jobs:
+  v4-logic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas gspread oauth2client
+
+      - name: Run v4 logic
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          # 必要なら固定（未設定ならRAWの先頭タブ＆全銘柄を自動検出）
+          # DATA_SHEET_NAME: "DATA_prices"
+          # TICKERS: "7203.T,1321.T"
+          # LOGIC_SHEET_NAME: "LOGIC_v4"
+        run: python update_v4_logic.py
