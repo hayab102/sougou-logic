@@ -30,6 +30,7 @@ jobs:
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
           # 必要なら固定（未設定ならRAWの先頭タブ＆全銘柄を自動検出）
           # DATA_SHEET_NAME: "DATA_prices"
           # TICKERS: "7203.T,1321.T"
