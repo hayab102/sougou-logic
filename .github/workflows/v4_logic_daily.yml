@@ -1,4 +1,4 @@
-.github/workflows/v4_logic_daily.yml
+
 name: V4 Logic Daily
 
 on:
