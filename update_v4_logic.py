@@ -92,9 +92,10 @@ def main():
     df = pd.DataFrame(values[1:], columns=header)
     # 型整形
     df = df.rename(columns={header[idx["date"]]: "date",
-                            header[idx["ticker"]]: "ticker",
-                            header[idx["open"]]: "open",
-                            header.get(idx.get("close")),})
+                        header[idx["ticker"]]: "ticker",
+                        header[idx["open"]]: "open",
+                        header[idx["close"]]: "close"})
+
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     for col in ["open","close","high","low","volume"]:
         if col in df.columns:
