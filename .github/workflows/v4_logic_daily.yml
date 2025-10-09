@@ -25,6 +25,80 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pandas gspread oauth2client
+          # ① リポの中身を可視化（パス間違い検出）
+- name: Debug repo tree
+  run: |
+    pwd
+    ls -la
+    find . -maxdepth 3 -type f | sort | sed -n '1,200p'
+
+# ② Secrets が空/誤りじゃないか（JSONも検証）
+- name: Verify secrets (IDs & JSON)
+  env:
+    SHEET_ID: ${{ secrets.SHEET_ID }}
+    SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
+    GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+  run: |
+    python - <<'PY'
+    import os, json, sys
+    miss = [k for k in ("SHEET_ID","SHEET_ID_LOGIC","GOOGLE_CREDENTIALS") if not os.environ.get(k)]
+    if miss:
+        print("❌ Missing secrets:", miss); sys.exit(1)
+    try:
+        j = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        print("✅ GOOGLE_CREDENTIALS JSON OK; client_email:", j.get("client_email"))
+    except Exception as e:
+        print("❌ GOOGLE_CREDENTIALS JSON invalid:", e); sys.exit(1)
+    for k in ("SHEET_ID","SHEET_ID_LOGIC"):
+        v = os.environ[k].strip()
+        if "/" in v or "https://" in v:
+            print(f"❌ {k} should be the ID ONLY (not full URL)")
+            sys.exit(1)
+        print(f"✅ {k} looks like an ID (len={len(v)})")
+    PY
+
+# ③ Google へ接続→ロジック用ブックに PING（編集権限・IDの生存確認）
+- name: Sanity write to LOGIC sheet
+  env:
+    GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+    SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
+  run: |
+    python - <<'PY'
+    import os, json, datetime
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GOOGLE_CREDENTIALS']), scope)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(os.environ['SHEET_ID_LOGIC'])
+    try:
+        ws = sh.worksheet("LOGIC_v4")
+    except:
+        ws = sh.add_worksheet(title="LOGIC_v4", rows=10, cols=3)
+    ws.update("A1", [["PING", datetime.datetime.utcnow().isoformat()+"Z"]])
+    print("✅ Wrote PING to LOGIC_v4 A1")
+    PY
+
+# ④ RAWブックが読めるか（先頭タブ or 指定タブ名）
+- name: Sanity read RAW sheet
+  env:
+    GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+    SHEET_ID: ${{ secrets.SHEET_ID }}
+    DATA_SHEET_NAME: ${{ env.DATA_SHEET_NAME }} # あればそのまま、無ければ先頭タブを読む
+  run: |
+    python - <<'PY'
+    import os, json, gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GOOGLE_CREDENTIALS']), scope)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(os.environ['SHEET_ID'])
+    ws = sh.worksheet(os.environ['DATA_SHEET_NAME']) if os.environ.get('DATA_SHEET_NAME') else sh.get_worksheet(0)
+    vals = ws.get_all_values()
+    print("✅ RAW sheet title:", ws.title, "/ rows:", len(vals))
+    if not vals:
+        raise SystemExit("❌ RAW is empty")
+    PY
 
       - name: Run v4 logic
         env:
