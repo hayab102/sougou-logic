@@ -104,6 +104,7 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID_RAW:   ${{ secrets.SHEET_ID }}
           SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
+          HEADER_LANG: ja
           # DATA_SHEET_NAME: DATA_prices
           # TICKERS: 7203.T,1321.T
           # LOGIC_SHEET_NAME: LOGIC_v4
