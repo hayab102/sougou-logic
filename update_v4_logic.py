@@ -179,7 +179,13 @@ def main():
 
     # 出力（ロジック用ブック）
     sh_dst = gc.open_by_key(SHEET_ID_LOGIC)
-    header_out = ["ticker", "date_latest", "close_latest", "rate1", "rate2", "rate3", "rate4", "rateAll", "updated_at"]
+    # ▼ヘッダーの言語切替（デフォルト英語、環境変数で日本語）
+lang = (os.environ.get("HEADER_LANG") or "en").lower()
+
+header_out_en = ["ticker","date_latest","close_latest","rate1","rate2","rate3","rate4","rateAll","updated_at"]
+header_out_ja = ["銘柄","最新日付","最新終値","率1","率2","率3","率4","総合率","更新時刻"]
+
+header_out = header_out_ja if lang == "ja" else header_out_en
 
     try:
         ws_out = sh_dst.worksheet(LOGIC_SHEET_NAME)
