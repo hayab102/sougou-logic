@@ -177,23 +177,30 @@ def main():
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
         ])
 
-    # 出力（ロジック用ブック）
+        # 出力（ロジック用ブック）
     sh_dst = gc.open_by_key(SHEET_ID_LOGIC)
-    # ▼ヘッダーの言語切替（デフォルト英語、環境変数で日本語）
-lang = (os.environ.get("HEADER_LANG") or "en").lower()
+
+    # ▼ヘッダーの言語切替（デフォルト英語、環境変数 HEADER_LANG=ja で日本語）
+    lang = (os.environ.get("HEADER_LANG") or "en").lower()
     header_out_en = ["ticker","date_latest","close_latest","rate1","rate2","rate3","rate4","rateAll","updated_at"]
     header_out_ja = ["銘柄","最新日付","最新終値","率1","率2","率3","率4","総合率","更新時刻"]
     header_out = header_out_ja if lang == "ja" else header_out_en
+    # ▲ここまで
 
     try:
         ws_out = sh_dst.worksheet(LOGIC_SHEET_NAME)
         ws_out.clear()
     except gspread.WorksheetNotFound:
-        ws_out = sh_dst.add_worksheet(title=LOGIC_SHEET_NAME, rows=max(100, len(rows) + 10), cols=len(header_out) + 2)
+        ws_out = sh_dst.add_worksheet(
+            title=LOGIC_SHEET_NAME,
+            rows=max(100, len(rows) + 10),
+            cols=len(header_out) + 2
+        )
 
     ws_out.update("A1", [header_out])
     if rows:
         ws_out.update("A2", rows)
+
 
     # ログ
     print("✅ LOGIC_v4 更新完了")
