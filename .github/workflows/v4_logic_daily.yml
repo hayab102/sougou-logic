@@ -11,7 +11,7 @@ permissions:
 jobs:
   v4-logic:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -22,7 +22,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pandas gspread oauth2client
+          pip install pandas yfinance gspread oauth2client requests openpyxl xlrd
 
       # ① リポの中身を可視化（パス間違い検出）
       - name: Debug repo tree
@@ -78,12 +78,28 @@ jobs:
           print("✅ Wrote PING to LOGIC_v4 A1")
           PY
 
-      # ④ RAWブックが読めるか（先頭タブ or 指定タブ名）
+      # ④ 銘柄リストを生成（JPX → jpx_tickers_full.csv → ticker_list.csv）
+      - name: Build ticker_list.csv
+        run: |
+          python get_all_tickers.py
+          python stock_csv_generator.py
+
+      # ⑤ RAW株価を更新
+      - name: Update RAW prices (日足)
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID_RAW:   ${{ secrets.SHEET_ID }}
+          DATA_SHEET_NAME: RAW_v4
+          TICKER_LIST_CSV: ticker_list.csv
+          DAYS_BACK: 60          # 最初は軽めにテスト。慣れたら 365 等に変更
+        run: python update_raw_prices_v4.py
+
+      # ⑥ RAWブックが正しく書けたか（先頭タブ or 指定タブ名）
       - name: Sanity read RAW sheet
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
-          # DATA_SHEET_NAME: DATA_prices     # RAWタブ名を固定したい時だけ有効化
+          DATA_SHEET_NAME: RAW_v4
         run: |
           python - <<'PY'
           import os, json, gspread
@@ -99,13 +115,13 @@ jobs:
               raise SystemExit("❌ RAW is empty")
           PY
 
+      # ⑦ 総合勝率ロジックを更新
       - name: Run v4 logic
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID_RAW:   ${{ secrets.SHEET_ID }}
           SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
           HEADER_LANG: ja
-          # DATA_SHEET_NAME: DATA_prices
-          # TICKERS: 7203.T,1321.T
-          # LOGIC_SHEET_NAME: LOGIC_v4
+          DATA_SHEET_NAME: RAW_v4
+          LOGIC_SHEET_NAME: LOGIC_v4
         run: python update_v4_logic.py
