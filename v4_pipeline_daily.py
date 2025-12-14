@@ -67,11 +67,44 @@ def ensure_ws(sh: gspread.Spreadsheet, title: str, rows: int = 2000, cols: int =
         return sh.add_worksheet(title=title, rows=rows, cols=cols)
 
 
+def _safe_cell(v):
+    # pandas/numpy の NaN/inf を完全に除去して JSON に通す
+    try:
+        if v is pd.NA:
+            return None
+    except Exception:
+        pass
+
+    if v is None:
+        return None
+
+    # numpy型 → Python型
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        v = float(v)
+
+    # float の NaN/inf を除去
+    if isinstance(v, float):
+        if np.isnan(v) or np.isinf(v):
+            return None
+        return v
+
+    # Timestamp等は文字列に
+    if isinstance(v, (pd.Timestamp, datetime)):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+
+    return v
+
+
 def write_table(ws: gspread.Worksheet, header: List[str], values: List[List[Any]]) -> None:
     ws.clear()
     ws.update("A1", [header])
+
     if values:
-        ws.update("A2", values)
+        safe_values = [[_safe_cell(v) for v in row] for row in values]
+        ws.update("A2", safe_values)
+
 
 
 # =============================
