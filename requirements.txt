@@ -1,4 +1,6 @@
 pandas
+numpy
+yfinance
 gspread
 oauth2client
 xlrd>=2.0.1
