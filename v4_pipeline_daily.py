@@ -1,16 +1,16 @@
 # v4_pipeline_daily.py
-# 本番用（RAW溜めない）：
-# - ticker_list.csv から全銘柄を読む
-# - 直近の必要期間だけ yfinance で取得
+# 本番用（RAWを溜めない）：
+# - ticker_list.csv を作る（別ステップ）
+# - 直近だけ yfinance で取得
 # - 直近120営業日で 率1〜4 / 総合率 / 急上昇(%) を計算
-# - Google Sheets（LOGIC_v4 / RANK_total / RANK_up）に出力
+# - Google Sheets に LOGIC_v4 / RANK_total / RANK_up を出力
 #
-# 重要：このファイルは “スペース4” で統一（タブ禁止）
-- name: Compile check
-  run: python -m py_compile v4_pipeline_daily.py
+# 重要：このファイルは Python だけ（YAMLを混ぜない）
+# インデントはスペース4固定（タブ禁止）
 
 import os
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -21,9 +21,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 
-
 # =============================
-# 環境変数
+# 環境変数（Actions env/secrets）
 # =============================
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS", "")
 if not GOOGLE_CREDENTIALS:
@@ -37,14 +36,18 @@ LOGIC_SHEET_NAME = os.environ.get("LOGIC_SHEET_NAME", "LOGIC_v4").strip()
 TICKER_LIST_CSV = os.environ.get("TICKER_LIST_CSV", "ticker_list.csv").strip()
 
 WINDOW_DAYS = int(os.environ.get("WINDOW_DAYS", "120"))         # 確定：120営業日
-LOOKAHEAD_DAYS = int(os.environ.get("LOOKAHEAD_DAYS", "7"))     # ④の先読み（7営業日後）
+LOOKAHEAD_DAYS = int(os.environ.get("LOOKAHEAD_DAYS", "7"))     # ④：7営業日後
 FETCH_CAL_DAYS = int(os.environ.get("FETCH_CAL_DAYS", "300"))   # 取得期間（カレンダー日数）
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "40"))            # まとめ取得のバッチ
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "40"))            # まとめ取得バッチ
 TOP_N = int(os.environ.get("TOP_N", "200"))                     # ランキング上位
+MAX_TICKERS = int(os.environ.get("MAX_TICKERS", "0"))           # 0=制限なし（本番は0）
+
+YF_RETRY = int(os.environ.get("YF_RETRY", "3"))                 # yfinance リトライ回数
+YF_RETRY_BASE_SLEEP = float(os.environ.get("YF_RETRY_SLEEP", "2.0"))  # 秒
 
 
 # =============================
-# Google Sheets 接続
+# Google Sheets
 # =============================
 def get_gspread_client() -> gspread.Client:
     scope = [
@@ -72,7 +75,7 @@ def write_table(ws: gspread.Worksheet, header: List[str], values: List[List[Any]
 
 
 # =============================
-# 銘柄リスト
+# ticker_list.csv 読み込み & 正規化
 # =============================
 def load_ticker_master(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
@@ -107,56 +110,70 @@ def load_ticker_master(path: str) -> pd.DataFrame:
 
     df["Code"] = df["Code"].map(to_yf_code)
     df = df[df["Code"] != ""].copy()
-
     df = df.drop_duplicates(subset=["Code"]).reset_index(drop=True)
+
+    if MAX_TICKERS and MAX_TICKERS > 0:
+        df = df.head(MAX_TICKERS).copy()
+
     return df
 
 
 # =============================
-# yfinance 取得（バッチ）
+# yfinance 取得（バッチ/リトライ）
 # =============================
 def yf_download_batch(codes: List[str], start: str, end: str) -> pd.DataFrame:
     if not codes:
         return pd.DataFrame()
 
-    try:
-        data = yf.download(
-            codes,
-            start=start,
-            end=end,
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=False,
-            threads=True,
-            progress=False,
-        )
-        return data
-    except Exception as e:
-        print(f"⚠ yfinance batch error: {e}")
-        return pd.DataFrame()
+    last_err: Optional[Exception] = None
+    for attempt in range(1, YF_RETRY + 1):
+        try:
+            data = yf.download(
+                codes,
+                start=start,
+                end=end,
+                interval="1d",
+                group_by="ticker",
+                auto_adjust=False,
+                threads=True,
+                progress=False,
+            )
+            return data
+        except Exception as e:
+            last_err = e
+            sleep_s = YF_RETRY_BASE_SLEEP * (2 ** (attempt - 1))
+            print(f"⚠ yfinance error (attempt {attempt}/{YF_RETRY}): {e}")
+            print(f"   retry after {sleep_s:.1f}s")
+            time.sleep(sleep_s)
+
+    print(f"⚠ yfinance failed after retries: {last_err}")
+    return pd.DataFrame()
 
 
 def build_price_table(codes: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
-    # yfinanceは end未満なので +1日
     start = start_date.strftime("%Y-%m-%d")
+    # yfinanceは end 未満なので +1日
     end = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
 
     print(f"サンプル銘柄（先頭10）: {codes[:10]}")
     frames: List[pd.DataFrame] = []
+
     total = len(codes)
     batches = ((total - 1) // BATCH_SIZE) + 1 if total > 0 else 0
 
     for i in range(0, total, BATCH_SIZE):
         batch = codes[i:i + BATCH_SIZE]
-        print(f"▶ Fetch batch {i//BATCH_SIZE + 1}/{batches}  size={len(batch)}")
+        print(f"▶ Fetch batch {i // BATCH_SIZE + 1}/{batches} size={len(batch)}")
         data = yf_download_batch(batch, start, end)
         if data.empty:
             continue
 
         # MultiIndex columns: (Ticker, Field)
         if isinstance(data.columns, pd.MultiIndex):
+            # data.columns.levels[0] が ticker 一覧
+            tickers_present = set([t for t in data.columns.levels[0] if isinstance(t, str)])
             for code in batch:
-                if code not in data.columns.levels[0]:
+                if code not in tickers_present:
                     continue
                 one = data[code].copy()
                 if one.empty:
@@ -167,7 +184,7 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
                     continue
 
                 one = one[need].copy()
-                one.reset_index(inplace=True)
+                one.reset_index(inplace=True)  # Date
 
                 one.rename(columns={
                     "Date": "date",
@@ -180,7 +197,6 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
 
                 one["ticker"] = code
                 frames.append(one[["date", "ticker", "open", "high", "low", "close", "volume"]])
-
         else:
             # 1銘柄だけ返るケースの保険
             need = ["Open", "High", "Low", "Close", "Volume"]
@@ -200,7 +216,7 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
             frames.append(one[["date", "ticker", "open", "high", "low", "close", "volume"]])
 
     if not frames:
-        # デバッグ：先頭1銘柄だけ単発で試す
+        # デバッグ：先頭1銘柄だけ単発で試す（原因切り分け用）
         try:
             test = codes[0] if codes else ""
             if test:
@@ -214,6 +230,7 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
 
     df = pd.concat(frames, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
     for c in ["open", "high", "low", "close", "volume"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -224,13 +241,25 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
 
 
 # =============================
-# 勝率計算
+# 勝率計算（あなたの4定義ベース）
 # =============================
 def pct(series: pd.Series) -> Optional[float]:
     s = series.dropna()
     if len(s) == 0:
         return None
-    return round(float(s.sum()) * 100.0 / float(len(s)), 2)
+    # True/False を bool として集計（pd.NA混在でもOK）
+    s_bool = s.astype(bool)
+    win = int(s_bool.sum())
+    total = int(len(s_bool))
+    if total == 0:
+        return None
+    return round(win * 100.0 / total, 2)
+
+
+def safe_ret1d(close: pd.Series, prev_close: pd.Series) -> pd.Series:
+    # prev_close が 0 の場合などで inf を作らない
+    denom = prev_close.where(prev_close != 0, np.nan)
+    return (close - prev_close) / denom
 
 
 def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
@@ -239,12 +268,12 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
 
     df = df_one.sort_values("date").copy()
 
-    # win4=7日先・win3=rolling等があるので余裕を持って尾側を確保
+    # win4=7日先・win3=rolling などがあるので余裕を持って尾側を確保
     need_tail = WINDOW_DAYS + LOOKAHEAD_DAYS + 30
     df = df.tail(need_tail).copy()
 
     df["prev_close"] = df["close"].shift(1)
-    df["ret1d"] = (df["close"] - df["prev_close"]) / df["prev_close"]
+    df["ret1d"] = safe_ret1d(df["close"], df["prev_close"])
 
     # ① close > prev_close
     df["win1"] = pd.NA
@@ -256,7 +285,7 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
     m2 = df["close"].notna() & df["open"].notna()
     df.loc[m2, "win2"] = (df.loc[m2, "close"] > df.loc[m2, "open"])
 
-    # ③ 5日平均リターン > 0
+    # ③ 5日平均リターン > 0（rolling不足はNA）
     ma = df["ret1d"].rolling(5, min_periods=5).mean()
     df["win3"] = pd.NA
     m3 = ma.notna()
@@ -268,7 +297,7 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
     m4 = df["close"].notna() & future.notna()
     df.loc[m4, "win4"] = (future.loc[m4] > df.loc[m4, "close"])
 
-    # 総合（1〜4が全部True）
+    # 総合（1〜4全部True。どれかNAならNA→分母除外）
     df["winAll"] = pd.NA
     mall = df["win1"].notna() & df["win2"].notna() & df["win3"].notna() & df["win4"].notna()
     df.loc[mall, "winAll"] = (
@@ -278,19 +307,21 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
         & df.loc[mall, "win4"].astype(bool)
     )
 
+    # 直近120営業日で評価（Bルール＝④末尾はNAで分母除外）
     eval_df = df.tail(WINDOW_DAYS).copy()
 
     latest = df.iloc[-1]
     date_latest = latest["date"]
     close_latest = latest["close"]
 
-    up_pct = None
-    if pd.notna(latest["ret1d"]):
+    # 急上昇(%) = 最新日の前日比%
+    up_pct: Optional[float] = None
+    if pd.notna(latest["ret1d"]) and np.isfinite(float(latest["ret1d"])):
         up_pct = round(float(latest["ret1d"]) * 100.0, 2)
 
     return {
         "date_latest": date_latest.strftime("%Y-%m-%d") if pd.notna(date_latest) else "",
-        "close_latest": float(close_latest) if pd.notna(close_latest) else "",
+        "close_latest": float(close_latest) if pd.notna(close_latest) and np.isfinite(float(close_latest)) else None,
         "rate1": pct(eval_df["win1"]),
         "rate2": pct(eval_df["win2"]),
         "rate3": pct(eval_df["win3"]),
@@ -298,6 +329,15 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
         "rateAll": pct(eval_df["winAll"]),
         "up_pct": up_pct,
     }
+
+
+def sanitize_for_sheets(df: pd.DataFrame) -> pd.DataFrame:
+    # gspreadがJSON化できない NaN/inf を除去して None にする
+    d = df.copy()
+    d = d.replace([np.inf, -np.inf], np.nan)
+    d = d.where(pd.notnull(d), None)
+    # numpy型が残ると稀に嫌がるので object 化
+    return d.astype(object)
 
 
 # =============================
@@ -311,7 +351,7 @@ def main() -> None:
     start_date = end_date - timedelta(days=FETCH_CAL_DAYS)
 
     print("=== v4_pipeline_daily (no raw storage) ===")
-    print(f"FETCH_CAL_DAYS={FETCH_CAL_DAYS} WINDOW_DAYS={WINDOW_DAYS} LOOKAHEAD_DAYS={LOOKAHEAD_DAYS} BATCH_SIZE={BATCH_SIZE} TOP_N={TOP_N}")
+    print(f"FETCH_CAL_DAYS={FETCH_CAL_DAYS} WINDOW_DAYS={WINDOW_DAYS} LOOKAHEAD_DAYS={LOOKAHEAD_DAYS} BATCH_SIZE={BATCH_SIZE} TOP_N={TOP_N} MAX_TICKERS={MAX_TICKERS}")
     print(f"期間（カレンダー）: {start_date} ～ {end_date}")
     print(f"TICKER_LIST_CSV: {TICKER_LIST_CSV}")
     print(f"SHEET_ID_LOGIC: {SHEET_ID_LOGIC}  LOGIC_SHEET_NAME: {LOGIC_SHEET_NAME}")
@@ -331,6 +371,7 @@ def main() -> None:
         part = df_prices[df_prices["ticker"] == code]
         if part.empty:
             continue
+
         r = calc_one_ticker(part)
         if not r:
             continue
@@ -356,28 +397,25 @@ def main() -> None:
         "銘柄", "銘柄名", "最新日付", "最新終値",
         "率1", "率2", "率3", "率4", "総合率", "急上昇(%)", "更新時刻"
     ])
-    # --- JSONにできない値（NaN/inf）を除去してSheets書き込みで落ちないようにする ---
-    df_out = df_out.replace([np.inf, -np.inf], np.nan)
-    df_out = df_out.where(pd.notnull(df_out), None)
 
-        # ランキング（上位N）
+    # ランキング（上位N）
     df_total = df_out.dropna(subset=["総合率"]).sort_values(["総合率", "急上昇(%)"], ascending=False).head(TOP_N).copy()
     df_total.insert(0, "順位", np.arange(1, len(df_total) + 1))
 
     df_up = df_out.dropna(subset=["急上昇(%)"]).sort_values(["急上昇(%)", "総合率"], ascending=False).head(TOP_N).copy()
     df_up.insert(0, "順位", np.arange(1, len(df_up) + 1))
 
-    # --- JSONにできない値（NaN/inf）を除去：Sheets書き込みで落ちないようにする（本番必須） ---
-    df_out = df_out.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_out), None)
-    df_total = df_total.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_total), None)
-    df_up = df_up.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_up), None)
+    # Sheets書き込み前に必ずサニタイズ（NaN/inf除去）
+    df_out = sanitize_for_sheets(df_out)
+    df_total = sanitize_for_sheets(df_total)
+    df_up = sanitize_for_sheets(df_up)
 
     gc = get_gspread_client()
     sh = gc.open_by_key(SHEET_ID_LOGIC)
 
-    ws_logic = ensure_ws(sh, LOGIC_SHEET_NAME, rows=max(2000, len(df_out) + 10), cols=20)
-    ws_rank_total = ensure_ws(sh, "RANK_total", rows=max(1000, TOP_N + 10), cols=20)
-    ws_rank_up = ensure_ws(sh, "RANK_up", rows=max(1000, TOP_N + 10), cols=20)
+    ws_logic = ensure_ws(sh, LOGIC_SHEET_NAME, rows=max(2000, len(df_out) + 20), cols=20)
+    ws_rank_total = ensure_ws(sh, "RANK_total", rows=max(1000, TOP_N + 20), cols=20)
+    ws_rank_up = ensure_ws(sh, "RANK_up", rows=max(1000, TOP_N + 20), cols=20)
 
     write_table(ws_logic, df_out.columns.tolist(), df_out.values.tolist())
     write_table(ws_rank_total, df_total.columns.tolist(), df_total.values.tolist())
