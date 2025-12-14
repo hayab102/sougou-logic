@@ -353,8 +353,14 @@ def main() -> None:
         "銘柄", "銘柄名", "最新日付", "最新終値",
         "率1", "率2", "率3", "率4", "総合率", "急上昇(%)", "更新時刻"
     ])
+    # --- JSONにできない値（NaN/inf）を除去してSheets書き込みで落ちないようにする ---
+    df_out = df_out.replace([np.inf, -np.inf], np.nan)
+    df_out = df_out.where(pd.notnull(df_out), None)
 
     # ランキング（上位N）
+        df_total = df_total.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_total), None)
+        df_up = df_up.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_up), None)
+
     df_total = df_out.dropna(subset=["総合率"]).sort_values(["総合率", "急上昇(%)"], ascending=False).head(TOP_N).copy()
     df_total.insert(0, "順位", np.arange(1, len(df_total) + 1))
 
