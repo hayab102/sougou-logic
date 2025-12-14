@@ -6,6 +6,8 @@
 # - Google Sheets（LOGIC_v4 / RANK_total / RANK_up）に出力
 #
 # 重要：このファイルは “スペース4” で統一（タブ禁止）
+- name: Compile check
+  run: python -m py_compile v4_pipeline_daily.py
 
 import os
 import json
@@ -17,6 +19,7 @@ import pandas as pd
 import yfinance as yf
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+
 
 
 # =============================
@@ -357,15 +360,17 @@ def main() -> None:
     df_out = df_out.replace([np.inf, -np.inf], np.nan)
     df_out = df_out.where(pd.notnull(df_out), None)
 
-    # ランキング（上位N）
-        df_total = df_total.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_total), None)
-        df_up = df_up.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_up), None)
-
+        # ランキング（上位N）
     df_total = df_out.dropna(subset=["総合率"]).sort_values(["総合率", "急上昇(%)"], ascending=False).head(TOP_N).copy()
     df_total.insert(0, "順位", np.arange(1, len(df_total) + 1))
 
     df_up = df_out.dropna(subset=["急上昇(%)"]).sort_values(["急上昇(%)", "総合率"], ascending=False).head(TOP_N).copy()
     df_up.insert(0, "順位", np.arange(1, len(df_up) + 1))
+
+    # --- JSONにできない値（NaN/inf）を除去：Sheets書き込みで落ちないようにする（本番必須） ---
+    df_out = df_out.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_out), None)
+    df_total = df_total.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_total), None)
+    df_up = df_up.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df_up), None)
 
     gc = get_gspread_client()
     sh = gc.open_by_key(SHEET_ID_LOGIC)
