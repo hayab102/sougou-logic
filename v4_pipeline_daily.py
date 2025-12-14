@@ -87,6 +87,25 @@ def load_ticker_master(path: str) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["Code"]).reset_index(drop=True)
     return df
 
+    # --- yfinance 用に正規化 ---
+    def to_yf_code(x: str) -> str:
+        x = (x or "").strip()
+        if not x:
+            return ""
+        # 指数は除外（必要なら別途）
+        if x.startswith("^"):
+            return ""
+        # すでに市場サフィックスがあるならそのまま
+        if "." in x:
+            return x
+        # 4桁数字なら東証(.T)扱い
+        if x.isdigit() and len(x) == 4:
+            return f"{x}.T"
+        return x
+
+    df["Code"] = df["Code"].map(to_yf_code)
+    df = df[df["Code"] != ""].copy()
+
 
 # -----------------------------
 # yfinance まとめ取得（バッチ）
@@ -117,6 +136,7 @@ def yf_download_batch(codes: list[str], start: str, end: str) -> pd.DataFrame:
 
 
 def build_price_table(codes: list[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
+       print(f"サンプル銘柄（先頭10）: {codes[:10]}")
     """
     全銘柄の (date, ticker, open, high, low, close, volume) を縦持ちで返す
     """
@@ -181,7 +201,16 @@ def build_price_table(codes: list[str], start_date: datetime, end_date: datetime
             frames.append(one[["date", "ticker", "open", "high", "low", "close", "volume"]])
 
     if not frames:
+        try:
+            test = codes[0] if codes else ""
+            if test:
+                print(f"DEBUG: single ticker test: {test}")
+                tdf = yf.download(test, start=start, end=end, progress=False)
+                print(f"DEBUG: single ticker rows={len(tdf)} cols={list(tdf.columns)}")
+        except Exception as e:
+            print(f"DEBUG: single ticker test error: {e}")
         raise RuntimeError("株価データが1件も取得できませんでした（yfinance/ネットワーク/銘柄コードを確認）")
+        
 
     df = pd.concat(frames, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
