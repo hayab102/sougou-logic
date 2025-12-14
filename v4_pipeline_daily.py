@@ -101,14 +101,10 @@ def load_ticker_master(path: str) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["Code"]).reset_index(drop=True)
     return df
 
-    
-
-
 # -----------------------------
 # yfinance まとめ取得（バッチ）
 # -----------------------------
-def yf_download_batch(codes: list[str], start: str, end: str) -> pd.
-DataFrame:
+def yf_download_batch(codes: list[str], start: str, end: str) -> pd.DataFrame:
     """
     yfinance のマルチティッカー取得。
     戻りは columns が MultiIndex になることが多い。
