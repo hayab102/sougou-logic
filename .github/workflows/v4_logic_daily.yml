@@ -1,127 +1,47 @@
-name: V4 Logic Daily
+name: V4 Logic Daily (Production)
 
 on:
-  workflow_dispatch: {}        # 手動実行ボタン
+  workflow_dispatch:
   schedule:
-    - cron: "10 0 * * *"       # JST 09:10（UTC表記）
-
-permissions:
-  contents: read
+    - cron: "10 0 * * 1-5"  # 平日 09:10 JST（UTC 00:10）
 
 jobs:
-  v4-logic:
+  v4:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 60
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pandas yfinance gspread oauth2client requests openpyxl xlrd
+          pip install pandas numpy yfinance gspread oauth2client
 
-      # ① リポの中身を可視化（パス間違い検出）
-      - name: Debug repo tree
-        run: |
-          pwd
-          ls -la
-          find . -maxdepth 3 -type f | sort | sed -n '1,200p'
-
-      # ② Secrets が空/誤りじゃないか（JSONも検証）
-      - name: Verify secrets (IDs & JSON)
-        env:
-          SHEET_ID: ${{ secrets.SHEET_ID }}
-          SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: |
-          python - <<'PY'
-          import os, json, sys
-          miss = [k for k in ("SHEET_ID","SHEET_ID_LOGIC","GOOGLE_CREDENTIALS") if not os.environ.get(k)]
-          if miss:
-              print("❌ Missing secrets:", miss); sys.exit(1)
-          try:
-              j = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-              print("✅ GOOGLE_CREDENTIALS JSON OK; client_email:", j.get("client_email"))
-          except Exception as e:
-              print("❌ GOOGLE_CREDENTIALS JSON invalid:", e); sys.exit(1)
-          for k in ("SHEET_ID","SHEET_ID_LOGIC"):
-              v = os.environ[k].strip()
-              if "/" in v or "https://" in v:
-                  print(f"❌ {k} should be the ID ONLY (not full URL)")
-                  sys.exit(1)
-              print(f"✅ {k} looks like an ID (len={len(v)})")
-          PY
-
-      # ③ Google へ接続→ロジック用ブックに PING（編集権限・IDの生存確認）
-      - name: Sanity write to LOGIC sheet
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
-        run: |
-          python - <<'PY'
-          import os, json, datetime
-          import gspread
-          from oauth2client.service_account import ServiceAccountCredentials
-          scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
-          creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GOOGLE_CREDENTIALS']), scope)
-          gc = gspread.authorize(creds)
-          sh = gc.open_by_key(os.environ['SHEET_ID_LOGIC'])
-          try:
-              ws = sh.worksheet("LOGIC_v4")
-          except:
-              ws = sh.add_worksheet(title="LOGIC_v4", rows=10, cols=3)
-          ws.update("A1", [["PING", datetime.datetime.utcnow().isoformat()+"Z"]])
-          print("✅ Wrote PING to LOGIC_v4 A1")
-          PY
-
-      # ④ 銘柄リストを生成（JPX → jpx_tickers_full.csv → ticker_list.csv）
+      # ① 全銘柄リスト生成（本番）
       - name: Build ticker_list.csv
         run: |
           python get_all_tickers.py
           python stock_csv_generator.py
 
-      # ⑤ RAW株価を更新
-      - name: Update RAW prices (日足)
+      # ② 全銘柄の直近だけ取得 → 直近120営業日で計算 → LOGIC_v4へ
+      - name: Run v4 pipeline (no raw storage)
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          SHEET_ID_RAW:   ${{ secrets.SHEET_ID }}
-          DATA_SHEET_NAME: RAW_v4
-          TICKER_LIST_CSV: ticker_list.csv
-          DAYS_BACK: 60          # 最初は軽めにテスト。慣れたら 365 等に変更
-        run: python update_raw_prices_v4.py
+          SHEET_ID_LOGIC:     ${{ secrets.SHEET_ID_LOGIC }}
+          LOGIC_SHEET_NAME:   LOGIC_v4
+          TICKER_LIST_CSV:    ticker_list.csv
 
-      # ⑥ RAWブックが正しく書けたか（先頭タブ or 指定タブ名）
-      - name: Sanity read RAW sheet
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          SHEET_ID: ${{ secrets.SHEET_ID }}
-          DATA_SHEET_NAME: RAW_v4
+          WINDOW_DAYS:        "120"
+          LOOKAHEAD_DAYS:     "7"
+          FETCH_CAL_DAYS:     "300"
+          BATCH_SIZE:         "40"
+          TOP_N:              "200"
         run: |
-          python - <<'PY'
-          import os, json, gspread
-          from oauth2client.service_account import ServiceAccountCredentials
-          scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
-          creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GOOGLE_CREDENTIALS']), scope)
-          gc = gspread.authorize(creds)
-          sh = gc.open_by_key(os.environ['SHEET_ID'])
-          ws = sh.worksheet(os.environ['DATA_SHEET_NAME']) if os.environ.get('DATA_SHEET_NAME') else sh.get_worksheet(0)
-          vals = ws.get_all_values()
-          print("✅ RAW sheet title:", ws.title, "/ rows:", len(vals))
-          if not vals:
-              raise SystemExit("❌ RAW is empty")
-          PY
-
-      # ⑦ 総合勝率ロジックを更新
-      - name: Run v4 logic
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          SHEET_ID_RAW:   ${{ secrets.SHEET_ID }}
-          SHEET_ID_LOGIC: ${{ secrets.SHEET_ID_LOGIC }}
-          HEADER_LANG: ja
-          DATA_SHEET_NAME: RAW_v4
-          LOGIC_SHEET_NAME: LOGIC_v4
-        run: python update_v4_logic.py
+          python v4_pipeline_daily.py
