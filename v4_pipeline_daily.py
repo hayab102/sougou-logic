@@ -59,8 +59,6 @@ def get_gspread_client():
         json.loads(GOOGLE_CREDENTIALS), scope
     )
     return gspread.authorize(creds)
-
-
 # -----------------------------
 # 銘柄リスト読み込み
 # -----------------------------
@@ -74,25 +72,19 @@ def load_ticker_master(path: str) -> pd.DataFrame:
     if "Code" not in df.columns:
         raise ValueError(f"{path} に Code 列がありません（例：7203.T）")
 
-    # 任意：Name（銘柄名があるなら拾う）
+    # 任意：Name（無ければ空で持つ）
     if "Name" not in df.columns:
         df["Name"] = ""
 
-    df["Code"] = df["Code"].astype(str).str.strip()
+    df["Code"] = df["Code"].astype(str).fillna("").str.strip()
     df["Name"] = df["Name"].astype(str).fillna("").str.strip()
 
-    # yfinanceが嫌う記号系は落とす（必要ならここを拡張）
-    df = df[~df["Code"].str.startswith("^")].copy()
-
-    df = df.drop_duplicates(subset=["Code"]).reset_index(drop=True)
-    return df
-
-    # --- yfinance 用に正規化 ---
+    # --- yfinance 用に正規化（ここが重要） ---
     def to_yf_code(x: str) -> str:
         x = (x or "").strip()
         if not x:
             return ""
-        # 指数は除外（必要なら別途）
+        # 指数は除外（必要なら別処理）
         if x.startswith("^"):
             return ""
         # すでに市場サフィックスがあるならそのまま
@@ -105,6 +97,11 @@ def load_ticker_master(path: str) -> pd.DataFrame:
 
     df["Code"] = df["Code"].map(to_yf_code)
     df = df[df["Code"] != ""].copy()
+
+    df = df.drop_duplicates(subset=["Code"]).reset_index(drop=True)
+    return df
+
+    
 
 
 # -----------------------------
