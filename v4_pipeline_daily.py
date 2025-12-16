@@ -123,7 +123,7 @@ def load_ticker_master(path: str) -> pd.DataFrame:
         if "銘柄名" in df.columns:
             df["Name"] = df["銘柄名"]
         else:
-            df["Name"] = ""
+        df["Name"] = ""
 
 
     df["Code"] = df["Code"].astype(str).fillna("").str.strip()
