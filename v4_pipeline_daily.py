@@ -430,6 +430,8 @@ def main() -> None:
         "銘柄", "銘柄名", "最新日付", "最新終値",
         "率1", "率2", "率3", "率4", "総合率", "急上昇(%)", "更新時刻"
     ])
+    # ✅ 急上昇(%) は必ず数値（float）に揃える（壊れてても強制修復）
+    df_out["急上昇(%)"] = pd.to_numeric(df_out["急上昇(%)"], errors="coerce").round(2)
 
     # ランキング（上位N）
     df_total = df_out.dropna(subset=["総合率"]).sort_values(["総合率", "急上昇(%)"], ascending=False).head(TOP_N).copy()
