@@ -118,12 +118,12 @@ def load_ticker_master(path: str) -> pd.DataFrame:
 
     if "Code" not in df.columns:
         raise ValueError(f"{path} に Code 列がありません（例：7203 または 7203.T）")
-
-    if "Name" not in df.columns:
-    if "銘柄名" in df.columns:
-        df["Name"] = df["銘柄名"]
-    else:
-        df["Name"] = ""
+        
+        if "Name" not in df.columns:
+        if "銘柄名" in df.columns:
+            df["Name"] = df["銘柄名"]
+        else:
+            df["Name"] = ""
 
 
     df["Code"] = df["Code"].astype(str).fillna("").str.strip()
