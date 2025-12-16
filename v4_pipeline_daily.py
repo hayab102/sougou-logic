@@ -106,7 +106,6 @@ def write_table(ws: gspread.Worksheet, header: List[str], values: List[List[Any]
         ws.update("A2", safe_values)
 
 
-
 # =============================
 # ticker_list.csv 読み込み & 正規化
 # =============================
@@ -118,13 +117,13 @@ def load_ticker_master(path: str) -> pd.DataFrame:
 
     if "Code" not in df.columns:
         raise ValueError(f"{path} に Code 列がありません（例：7203 または 7203.T）")
-        
-    if "Name" not in df.columns:
-    if "銘柄名" in df.columns:
-    df["Name"] = df["銘柄名"]
-    else:
-    df["Name"] = ""
 
+    # ✅ ここが今回の本丸：Name列が無い場合でも「銘柄名」から埋める
+    if "Name" not in df.columns:
+        if "銘柄名" in df.columns:
+            df["Name"] = df["銘柄名"]
+        else:
+            df["Name"] = ""
 
     df["Code"] = df["Code"].astype(str).fillna("").str.strip()
     df["Name"] = df["Name"].astype(str).fillna("").str.strip()
@@ -207,7 +206,6 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
 
         # MultiIndex columns: (Ticker, Field)
         if isinstance(data.columns, pd.MultiIndex):
-            # data.columns.levels[0] が ticker 一覧
             tickers_present = set([t for t in data.columns.levels[0] if isinstance(t, str)])
             for code in batch:
                 if code not in tickers_present:
@@ -284,7 +282,6 @@ def pct(series: pd.Series) -> Optional[float]:
     s = series.dropna()
     if len(s) == 0:
         return None
-    # True/False を bool として集計（pd.NA混在でもOK）
     s_bool = s.astype(bool)
     win = int(s_bool.sum())
     total = int(len(s_bool))
@@ -294,7 +291,6 @@ def pct(series: pd.Series) -> Optional[float]:
 
 
 def safe_ret1d(close: pd.Series, prev_close: pd.Series) -> pd.Series:
-    # prev_close が 0 の場合などで inf を作らない
     denom = prev_close.where(prev_close != 0, np.nan)
     return (close - prev_close) / denom
 
@@ -305,7 +301,6 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
 
     df = df_one.sort_values("date").copy()
 
-    # win4=7日先・win3=rolling などがあるので余裕を持って尾側を確保
     need_tail = WINDOW_DAYS + LOOKAHEAD_DAYS + 30
     df = df.tail(need_tail).copy()
 
@@ -344,7 +339,6 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
         & df.loc[mall, "win4"].astype(bool)
     )
 
-    # 直近120営業日で評価（Bルール＝④末尾はNAで分母除外）
     eval_df = df.tail(WINDOW_DAYS).copy()
 
     latest = df.iloc[-1]
@@ -369,11 +363,9 @@ def calc_one_ticker(df_one: pd.DataFrame) -> Optional[Dict[str, Any]]:
 
 
 def sanitize_for_sheets(df: pd.DataFrame) -> pd.DataFrame:
-    # gspreadがJSON化できない NaN/inf を除去して None にする
     d = df.copy()
     d = d.replace([np.inf, -np.inf], np.nan)
     d = d.where(pd.notnull(d), None)
-    # numpy型が残ると稀に嫌がるので object 化
     return d.astype(object)
 
 
@@ -401,7 +393,7 @@ def main() -> None:
         codes,
         datetime.combine(start_date, datetime.min.time()),
         datetime.combine(end_date, datetime.min.time()),
-    )
+        )
 
     out_rows: List[List[Any]] = []
     for code, name in zip(master["Code"], master["Name"]):
@@ -434,11 +426,11 @@ def main() -> None:
         "銘柄", "銘柄名", "最新日付", "最新終値",
         "率1", "率2", "率3", "率4", "総合率", "急上昇(%)", "更新時刻"
     ])
+
     # ✅ 急上昇(%) を必ず数値にして、異常値を除外（他は触らない）
     df_out["急上昇(%)"] = pd.to_numeric(df_out["急上昇(%)"], errors="coerce")
     df_out.loc[df_out["急上昇(%)"].abs() > 60, "急上昇(%)"] = np.nan
     df_out["急上昇(%)"] = df_out["急上昇(%)"].round(2)
-
 
     # ランキング（上位N）
     df_total = df_out.dropna(subset=["総合率"]).sort_values(["総合率", "急上昇(%)"], ascending=False).head(TOP_N).copy()
