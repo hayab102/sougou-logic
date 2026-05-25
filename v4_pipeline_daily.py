@@ -42,7 +42,7 @@ BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "40"))            # まとめ取�
 TOP_N = int(os.environ.get("TOP_N", "200"))                     # ランキング上位
 MAX_TICKERS = int(os.environ.get("MAX_TICKERS", "0"))           # 0=制限なし（本番は0）
 
-YF_RETRY = int(os.environ.get("YF_RETRY", "3"))                 # yfinance リトライ回数
+YF_RETRY = int(os.environ.get("YF_RETRY", "2"))                 # yfinance リトライ回数
 YF_RETRY_BASE_SLEEP = float(os.environ.get("YF_RETRY_SLEEP", "2.0"))  # 秒
 
 
