@@ -118,7 +118,7 @@ def load_ticker_master(path: str) -> pd.DataFrame:
     if "Code" not in df.columns:
         raise ValueError(f"{path} に Code 列がありません（例：7203 または 7203.T）")
 
-    # ✅ ここが今回の本丸：Name列が無い場合でも「銘柄名」から埋める
+    # Name列が無い場合でも「銘柄名」から埋める
     if "Name" not in df.columns:
         if "銘柄名" in df.columns:
             df["Name"] = df["銘柄名"]
@@ -129,19 +129,24 @@ def load_ticker_master(path: str) -> pd.DataFrame:
     df["Name"] = df["Name"].astype(str).fillna("").str.strip()
 
     # yfinance用に正規化：
-    # - 4桁数字は .T を付ける（7203 -> 7203.T）
+    # - 4桁数字: 7203 -> 7203.T
+    # - 英字入り日本株: 130A -> 130A.T
     # - すでに .T 等が付いていればそのまま
     # - ^で始まる指数は除外
     def to_yf_code(x: str) -> str:
-        x = (x or "").strip()
+        x = (x or "").strip().upper()
         if not x:
             return ""
         if x.startswith("^"):
             return ""
         if "." in x:
             return x
-        if x.isdigit() and len(x) == 4:
+
+        # 東証の通常コード/英字入りコードは4文字想定
+        # 例: 7203, 130A, 131A
+        if len(x) == 4 and x.isalnum():
             return f"{x}.T"
+
         return x
 
     df["Code"] = df["Code"].map(to_yf_code)
@@ -152,6 +157,8 @@ def load_ticker_master(path: str) -> pd.DataFrame:
         df = df.head(MAX_TICKERS).copy()
 
     return df
+
+    
 
 
 # =============================
@@ -185,7 +192,6 @@ def yf_download_batch(codes: List[str], start: str, end: str) -> pd.DataFrame:
     print(f"⚠ yfinance failed after retries: {last_err}")
     return pd.DataFrame()
 
-
 def build_price_table(codes: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
     start = start_date.strftime("%Y-%m-%d")
     # yfinanceは end 未満なので +1日
@@ -193,6 +199,47 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
 
     print(f"サンプル銘柄（先頭10）: {codes[:10]}")
     frames: List[pd.DataFrame] = []
+    need = ["Open", "High", "Low", "Close", "Volume"]
+    out_cols = ["date", "ticker", "open", "high", "low", "close", "volume"]
+
+    def normalize_one(one: pd.DataFrame, code: str) -> Optional[pd.DataFrame]:
+        if one is None or one.empty:
+            print(f"  SKIP empty: {code}")
+            return None
+
+        missing = [c for c in need if c not in one.columns]
+        if missing:
+            print(f"  SKIP missing OHLCV: {code} missing={missing} cols={list(one.columns)}")
+            return None
+
+        one = one[need].copy()
+        one = one.dropna(how="all", subset=need)
+        if one.empty:
+            print(f"  SKIP all-NaN OHLCV: {code}")
+            return None
+
+        one.reset_index(inplace=True)
+
+        # reset_index後の先頭列名は Date / Datetime / index など環境で揺れるため、
+        # 先頭列を必ず date として扱う
+        first_col = one.columns[0]
+        one.rename(columns={
+            first_col: "date",
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+        }, inplace=True)
+
+        one["ticker"] = code
+
+        missing_out = [c for c in out_cols if c not in one.columns]
+        if missing_out:
+            print(f"  SKIP missing output columns: {code} missing={missing_out} cols={list(one.columns)}")
+            return None
+
+        return one[out_cols].copy()
 
     total = len(codes)
     batches = ((total - 1) // BATCH_SIZE) + 1 if total > 0 else 0
@@ -201,54 +248,35 @@ def build_price_table(codes: List[str], start_date: datetime, end_date: datetime
         batch = codes[i:i + BATCH_SIZE]
         print(f"▶ Fetch batch {i // BATCH_SIZE + 1}/{batches} size={len(batch)}")
         data = yf_download_batch(batch, start, end)
-        if data.empty:
+        if data is None or data.empty:
+            print(f"  SKIP empty batch: {batch[:3]}...")
             continue
 
         # MultiIndex columns: (Ticker, Field)
         if isinstance(data.columns, pd.MultiIndex):
-            tickers_present = set([t for t in data.columns.levels[0] if isinstance(t, str)])
+            tickers_present = set([t for t in data.columns.get_level_values(0) if isinstance(t, str)])
+
             for code in batch:
                 if code not in tickers_present:
-                    continue
-                one = data[code].copy()
-                if one.empty:
+                    print(f"  SKIP not returned: {code}")
                     continue
 
-                need = ["Open", "High", "Low", "Close", "Volume"]
-                if any(c not in one.columns for c in need):
+                try:
+                    one = data[code].copy()
+                except Exception as e:
+                    print(f"  SKIP select failed: {code} err={e}")
                     continue
 
-                one = one[need].copy()
-                one.reset_index(inplace=True)  # Date
+                normalized = normalize_one(one, code)
+                if normalized is not None:
+                    frames.append(normalized)
 
-                one.rename(columns={
-                    "Date": "date",
-                    "Open": "open",
-                    "High": "high",
-                    "Low": "low",
-                    "Close": "close",
-                    "Volume": "volume",
-                }, inplace=True)
-
-                one["ticker"] = code
-                frames.append(one[["date", "ticker", "open", "high", "low", "close", "volume"]])
         else:
             # 1銘柄だけ返るケースの保険
-            need = ["Open", "High", "Low", "Close", "Volume"]
-            if any(c not in data.columns for c in need):
-                continue
-            one = data[need].copy()
-            one.reset_index(inplace=True)
-            one.rename(columns={
-                "Date": "date",
-                "Open": "open",
-                "High": "high",
-                "Low": "low",
-                "Close": "close",
-                "Volume": "volume",
-            }, inplace=True)
-            one["ticker"] = batch[0]
-            frames.append(one[["date", "ticker", "open", "high", "low", "close", "volume"]])
+            code = batch[0] if batch else ""
+            normalized = normalize_one(data.copy(), code)
+            if normalized is not None:
+                frames.append(normalized)
 
     if not frames:
         # デバッグ：先頭1銘柄だけ単発で試す（原因切り分け用）
